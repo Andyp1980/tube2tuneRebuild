@@ -4,12 +4,20 @@ from yt_dlp import YoutubeDL
 from pydub import AudioSegment
 import os
 import uuid
+import tempfile
 
 app = Flask(__name__)
 app.secret_key = 'supersecret'  # Required for flashing messages
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# Save cookies from env var to temp file
+cookie_content = os.getenv('YOUTUBE_COOKIES')
+cookie_path = None
 
+if cookie_content:
+    with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+        f.write(cookie_content)
+        cookie_path = f.name
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -100,6 +108,8 @@ def download():
         'quiet': True,
         'postprocessors': [],
     }
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
