@@ -124,6 +124,3 @@ def download():
 
 if __name__ == '__main__':
     app.run(debug=True)
-git remote add origin https://github.com/Andyp1980/tube2tune
-git branch -M main
-git push -u origin main
