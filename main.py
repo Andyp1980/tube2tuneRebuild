@@ -25,6 +25,7 @@ if cookie_content:
 else:
     print("⚠️ No YOUTUBE_COOKIES found in environment")
 
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -108,12 +109,27 @@ def download():
     temp_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.webm")
     mp3_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
 
+    # ✅ Write cookies to temp file at request time
+    cookie_path = None
+    cookie_content = os.getenv('YOUTUBE_COOKIES')
+    if cookie_content:
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+                f.write(cookie_content)
+                cookie_path = f.name
+            print(f"✅ Cookie file written to: {cookie_path}")
+        except Exception as e:
+            print(f"❌ Error writing cookie file: {e}")
+    else:
+        print("⚠️ No YOUTUBE_COOKIES found in environment")
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': temp_file,
         'quiet': True,
         'postprocessors': [],
     }
+
     if cookie_path:
         ydl_opts['cookiefile'] = cookie_path
 
@@ -128,8 +144,10 @@ def download():
         def remove_file(response):
             try:
                 os.remove(mp3_file)
+                if cookie_path:
+                    os.remove(cookie_path)
             except Exception as e:
-                app.logger.error(f"Failed to delete {mp3_file}: {e}")
+                app.logger.error(f"Cleanup failed: {e}")
             return response
 
         return send_file(mp3_file, as_attachment=True)
