@@ -15,9 +15,15 @@ cookie_content = os.getenv('YOUTUBE_COOKIES')
 cookie_path = None
 
 if cookie_content:
-    with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
-        f.write(cookie_content)
-        cookie_path = f.name
+    try:
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+            f.write(cookie_content)
+            cookie_path = f.name
+        print(f"✅ Cookie file written to: {cookie_path}")
+    except Exception as e:
+        print(f"❌ Error writing cookie file: {e}")
+else:
+    print("⚠️ No YOUTUBE_COOKIES found in environment")
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -131,6 +137,12 @@ def download():
     except Exception as e:
         flash(f"Error: {str(e)}", 'danger')
         return redirect(url_for('index'))
+
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
 
 if __name__ == '__main__':
     app.run(debug=True)
