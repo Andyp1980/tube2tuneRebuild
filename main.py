@@ -63,7 +63,7 @@ def index():
                 <div class="form-group">
                     <input type="url" name="url" class="form-control" placeholder="Paste YouTube URL" required>
                 </div>
-                <button type="submit" class="btn btn-primary btn-block">Fetch Title</button>
+                <button type="submit" class="btn btn-primary btn-block">Get Audio</button>
             </form>
         </div>
     </body>
@@ -77,24 +77,57 @@ def preview():
         return redirect(url_for('index'))
 
     return render_template_string('''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Confirm Download - Tube2Tune</title>
-        <link rel="stylesheet"
-              href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    </head>
-    <body>
-        <div class="container text-center" style="padding-top: 80px;">
-            <h3>🎵 Ready to download:</h3>
-            <p><strong>{{ session['video_title'] }}</strong></p>
-            <form method="post" action="{{ url_for('download') }}">
-                <button type="submit" class="btn btn-success">Download as MP3</button>
-            </form>
-            <a href="{{ url_for('index') }}" class="btn btn-secondary mt-2">Cancel</a>
-        </div>
-    </body>
-    </html>
+ <!DOCTYPE html>
+<html>
+<head>
+  <title>Confirm Download - Tube2Tune</title>
+  <link rel="stylesheet"
+        href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <script src="https://unpkg.com/wavesurfer.js"></script>
+  <script src="https://unpkg.com/wavesurfer.js/dist/plugin/wavesurfer.regions.min.js"></script>
+</head>
+<body>
+  <div class="container text-center" style="padding-top: 50px;">
+    <h3>🎵 Preview: {{ session['video_title'] }}</h3>
+    <div id="waveform" style="margin: 20px auto; width: 90%; height: 128px;"></div>
+    <form method="post" action="{{ url_for('slice_audio') }}">
+      <input type="hidden" name="start" id="start">
+      <input type="hidden" name="end" id="end">
+      <button type="submit" class="btn btn-success">Download Selection</button>
+    </form>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary mt-2">Cancel</a>
+  </div>
+
+  <script>
+    const wavesurfer = WaveSurfer.create({
+      container: '#waveform',
+      waveColor: '#8ecae6',
+      progressColor: '#219ebc',
+      backend: 'MediaElement',
+      height: 128,
+      plugins: [
+        WaveSurfer.regions.create()
+      ]
+    });
+
+    wavesurfer.load('/static/sample.mp3');
+
+    let activeRegion;
+
+    wavesurfer.on('ready', () => {
+      wavesurfer.enableDragSelection({
+        color: 'rgba(173, 216, 230, 0.4)'
+      });
+    });
+
+    wavesurfer.on('region-updated', (region) => {
+      activeRegion = region;
+      document.getElementById('start').value = region.start.toFixed(2);
+      document.getElementById('end').value = region.end.toFixed(2);
+    });
+  </script>
+</body>
+</html>
     ''')
 
 
@@ -137,7 +170,12 @@ def download():
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         audio = AudioSegment.from_file(temp_file)
+
+        # ✅ Save full audio for download
         audio.export(mp3_file, format='mp3')
+
+        # ✅ Also save first 10 seconds to static/sample.mp3 for waveform preview
+        audio[:10000].export('static/sample.mp3', format='mp3')
         os.remove(temp_file)
 
         @after_this_request
@@ -160,6 +198,62 @@ def download():
 @app.route('/health')
 def health():
     return "OK", 200
+
+
+@app.route('/slice', methods=['POST'])
+def slice_audio():
+    start = float(request.form['start']) * 1000  # convert to ms
+    end = float(request.form['end']) * 1000
+
+    url = session.get('video_url')
+    if not url:
+        flash("Session expired.", "danger")
+        return redirect(url_for('index'))
+
+    video_id = str(uuid.uuid4())
+    temp_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.webm")
+    mp3_file = os.path.join(DOWNLOAD_DIR, f"{video_id}_clip.mp3")
+
+    # Use cookie logic (reuse your existing code here!)
+    cookie_path = None
+    cookie_content = os.getenv('YOUTUBE_COOKIES')
+    if cookie_content:
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+            f.write(cookie_content)
+            cookie_path = f.name
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': temp_file,
+        'quiet': True,
+        'postprocessors': [],
+    }
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        audio = AudioSegment.from_file(temp_file)
+        clip = audio[start:end]
+        clip.export(mp3_file, format='mp3')
+        os.remove(temp_file)
+        if cookie_path:
+            os.remove(cookie_path)
+
+        @after_this_request
+        def cleanup(response):
+            try:
+                os.remove(mp3_file)
+            except Exception as e:
+                app.logger.warning(f"Cleanup error: {e}")
+            return response
+
+        return send_file(mp3_file, as_attachment=True)
+
+    except Exception as e:
+        flash(f"Error slicing audio: {str(e)}", 'danger')
+        return redirect(url_for('preview'))
 
 
 if __name__ == '__main__':
