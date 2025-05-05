@@ -63,7 +63,7 @@ def index():
                 <div class="form-group">
                     <input type="url" name="url" class="form-control" placeholder="Paste YouTube URL" required>
                 </div>
-                <button type="submit" class="btn btn-primary btn-block">Fetch Title</button>
+                <button type="submit" class="btn btn-primary btn-block">Get Audio</button>
             </form>
         </div>
     </body>
