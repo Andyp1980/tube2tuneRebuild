@@ -11,19 +11,19 @@ app.secret_key = 'supersecret'  # Required for flashing messages
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # Save cookies from env var to temp file
-cookie_content = os.getenv('YOUTUBE_COOKIES')
-cookie_path = None
-
-if cookie_content:
-    try:
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
-            f.write(cookie_content)
-            cookie_path = f.name
-        print(f"✅ Cookie file written to: {cookie_path}")
-    except Exception as e:
-        print(f"❌ Error writing cookie file: {e}")
-else:
-    print("⚠️ No YOUTUBE_COOKIES found in environment")
+# cookie_content = os.getenv('YOUTUBE_COOKIES')
+# cookie_path = None
+#
+# if cookie_content:
+#     try:
+#         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+#             f.write(cookie_content)
+#             cookie_path = f.name
+#         print(f"✅ Cookie file written to: {cookie_path}")
+#     except Exception as e:
+#         print(f"❌ Error writing cookie file: {e}")
+# else:
+#     print("⚠️ No YOUTUBE_COOKIES found in environment")
 
 
 @app.route('/', methods=['GET', 'POST'])
@@ -109,20 +109,7 @@ def download():
     temp_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.webm")
     mp3_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
 
-    # ✅ Write cookies to temp file at request time
-    cookie_path = None
-    cookie_content = os.getenv('YOUTUBE_COOKIES')
-    if cookie_content:
-        try:
-            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
-                f.write(cookie_content)
-                cookie_path = f.name
-            print(f"✅ Cookie file written to: {cookie_path}")
-        except Exception as e:
-            print(f"❌ Error writing cookie file: {e}")
-    else:
-        print("⚠️ No YOUTUBE_COOKIES found in environment")
-
+    # Define options first
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': temp_file,
@@ -130,8 +117,20 @@ def download():
         'postprocessors': [],
     }
 
-    if cookie_path:
-        ydl_opts['cookiefile'] = cookie_path
+    # ✅ Write cookies to temp file at request time
+    cookie_path = None
+    cookie_content = os.getenv('YOUTUBE_COOKIES')
+    if cookie_content:
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+                f.write(cookie_content.strip('\"\''))
+                cookie_path = f.name
+            ydl_opts['cookiefile'] = cookie_path  # <-- NOW it's safe
+            print(f"✅ Cookie file written to: {cookie_path}")
+        except Exception as e:
+            print(f"❌ Error writing cookie file: {e}")
+    else:
+        print("⚠️ No YOUTUBE_COOKIES found in environment")
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -146,6 +145,7 @@ def download():
                 os.remove(mp3_file)
                 if cookie_path:
                     os.remove(cookie_path)
+                    print("🧹 Temp cookie file cleaned up")
             except Exception as e:
                 app.logger.error(f"Cleanup failed: {e}")
             return response
