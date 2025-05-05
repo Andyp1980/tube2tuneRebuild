@@ -1,41 +1,66 @@
-from flask import (Flask, request, send_file, render_template_string, after_this_request, flash,
-                   redirect, url_for, session)
+from flask import Flask, request, send_file, render_template_string, after_this_request, flash, redirect, url_for
 from yt_dlp import YoutubeDL
 from pydub import AudioSegment
 import os
 import uuid
-import tempfile
+import tempfile  # ✅ added
 
 app = Flask(__name__)
-app.secret_key = 'supersecret'  # Required for flashing messages
+app.secret_key = 'supersecret'
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-# Save cookies from env var to temp file
-cookie_content = os.getenv('YOUTUBE_COOKIES')
-cookie_path = None
-
-if cookie_content:
-    try:
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
-            f.write(cookie_content)
-            cookie_path = f.name
-        print(f"✅ Cookie file written to: {cookie_path}")
-    except Exception as e:
-        print(f"❌ Error writing cookie file: {e}")
-else:
-    print("⚠️ No YOUTUBE_COOKIES found in environment")
-
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         url = request.form['url']
+        video_id = str(uuid.uuid4())
+        temp_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.webm")
+        mp3_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
+
+        # ✅ Handle YouTube cookies
+        cookie_path = None
+        cookie_content = os.getenv('YOUTUBE_COOKIES')
+        if cookie_content:
+            try:
+                with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
+                    f.write(cookie_content)
+                    cookie_path = f.name
+                print(f"✅ Cookie file written: {cookie_path}")
+            except Exception as e:
+                print(f"❌ Failed to write cookie file: {e}")
+        else:
+            print("⚠️ No YOUTUBE_COOKIES found in environment")
+
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': temp_file,
+            'quiet': True,
+            'postprocessors': [],
+        }
+
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path  # ✅ pass to yt_dlp
+
         try:
-            with YoutubeDL({'quiet': True}) as ydl:
-                info = ydl.extract_info(url, download=False)
-            session['video_url'] = url
-            session['video_title'] = info['title']
-            return redirect(url_for('preview'))
+            with YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            audio = AudioSegment.from_file(temp_file)
+            audio.export(mp3_file, format='mp3')
+            os.remove(temp_file)
+            if cookie_path:
+                os.remove(cookie_path)  # ✅ clean up
+
+            @after_this_request
+            def remove_file(response):
+                try:
+                    os.remove(mp3_file)
+                except Exception as e:
+                    app.logger.error(f"Failed to delete {mp3_file}: {e}")
+                return response
+
+            return send_file(mp3_file, as_attachment=True)
+
         except Exception as e:
             flash(f"Error: {str(e)}", 'danger')
             return redirect(url_for('index'))
@@ -44,217 +69,40 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Tube2Tune - Convert YouTube to MP3</title>
+        <title>YouTube to MP3 Converter</title>
         <link rel="stylesheet"
               href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-        <style>body { background-color: #f8f9fa; padding-top: 80px; }</style>
+        <style>
+            body { background-color: #f8f9fa; padding-top: 80px; }
+            .container { max-width: 600px; }
+        </style>
     </head>
     <body>
         <div class="container text-center">
-            <h2 class="mb-4">🎧 Tube2Tune</h2>
+            <h2 class="mb-4">🎧 YouTube to MP3 Converter</h2>
             {% with messages = get_flashed_messages(with_categories=true) %}
               {% if messages %}
                 {% for category, message in messages %}
-                  <div class="alert alert-{{ category }}">{{ message }}</div>
+                  <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="close" data-dismiss="alert">&times;</button>
+                  </div>
                 {% endfor %}
               {% endif %}
             {% endwith %}
             <form method="post">
                 <div class="form-group">
-                    <input type="url" name="url" class="form-control" placeholder="Paste YouTube URL" required>
+                    <input type="url" name="url" class="form-control"
+                           placeholder="Paste YouTube link here" required>
                 </div>
-                <button type="submit" class="btn btn-primary btn-block">Get Audio</button>
+                <button type="submit" class="btn btn-primary btn-block">Convert to MP3</button>
             </form>
         </div>
+        <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
     </body>
     </html>
     ''')
-
-
-@app.route('/preview', methods=['GET'])
-def preview():
-    if not session.get('video_url') or not session.get('video_title'):
-        return redirect(url_for('index'))
-
-    return render_template_string('''
- <!DOCTYPE html>
-<html>
-<head>
-  <title>Confirm Download - Tube2Tune</title>
-  <link rel="stylesheet"
-        href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-  <script src="https://unpkg.com/wavesurfer.js"></script>
-  <script src="https://unpkg.com/wavesurfer.js/dist/plugin/wavesurfer.regions.min.js"></script>
-</head>
-<body>
-  <div class="container text-center" style="padding-top: 50px;">
-    <h3>🎵 Preview: {{ session['video_title'] }}</h3>
-    <div id="waveform" style="margin: 20px auto; width: 90%; height: 128px;"></div>
-    <form method="post" action="{{ url_for('slice_audio') }}">
-      <input type="hidden" name="start" id="start">
-      <input type="hidden" name="end" id="end">
-      <button type="submit" class="btn btn-success">Download Selection</button>
-    </form>
-    <a href="{{ url_for('index') }}" class="btn btn-secondary mt-2">Cancel</a>
-  </div>
-
-  <script>
-    const wavesurfer = WaveSurfer.create({
-      container: '#waveform',
-      waveColor: '#8ecae6',
-      progressColor: '#219ebc',
-      backend: 'MediaElement',
-      height: 128,
-      plugins: [
-        WaveSurfer.regions.create()
-      ]
-    });
-
-    wavesurfer.load('/static/sample.mp3');
-
-    let activeRegion;
-
-    wavesurfer.on('ready', () => {
-      wavesurfer.enableDragSelection({
-        color: 'rgba(173, 216, 230, 0.4)'
-      });
-    });
-
-    wavesurfer.on('region-updated', (region) => {
-      activeRegion = region;
-      document.getElementById('start').value = region.start.toFixed(2);
-      document.getElementById('end').value = region.end.toFixed(2);
-    });
-  </script>
-</body>
-</html>
-    ''')
-
-
-@app.route('/download', methods=['POST'])
-def download():
-    url = session.get('video_url')
-    if not url:
-        flash("Invalid session. Please try again.", "danger")
-        return redirect(url_for('index'))
-
-    video_id = str(uuid.uuid4())
-    temp_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.webm")
-    mp3_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
-
-    # ✅ Write cookies to temp file at request time
-    cookie_path = None
-    cookie_content = os.getenv('YOUTUBE_COOKIES')
-    if cookie_content:
-        try:
-            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
-                f.write(cookie_content)
-                cookie_path = f.name
-            print(f"✅ Cookie file written to: {cookie_path}")
-        except Exception as e:
-            print(f"❌ Error writing cookie file: {e}")
-    else:
-        print("⚠️ No YOUTUBE_COOKIES found in environment")
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': temp_file,
-        'quiet': True,
-        'postprocessors': [],
-    }
-
-    if cookie_path:
-        ydl_opts['cookiefile'] = cookie_path
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        audio = AudioSegment.from_file(temp_file)
-
-        # ✅ Save full audio for download
-        audio.export(mp3_file, format='mp3')
-
-        # ✅ Also save first 10 seconds to static/sample.mp3 for waveform preview
-        audio[:10000].export('static/sample.mp3', format='mp3')
-        os.remove(temp_file)
-
-        @after_this_request
-        def remove_file(response):
-            try:
-                os.remove(mp3_file)
-                if cookie_path:
-                    os.remove(cookie_path)
-            except Exception as e:
-                app.logger.error(f"Cleanup failed: {e}")
-            return response
-
-        return send_file(mp3_file, as_attachment=True)
-
-    except Exception as e:
-        flash(f"Error: {str(e)}", 'danger')
-        return redirect(url_for('index'))
-
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-
-@app.route('/slice', methods=['POST'])
-def slice_audio():
-    start = float(request.form['start']) * 1000  # convert to ms
-    end = float(request.form['end']) * 1000
-
-    url = session.get('video_url')
-    if not url:
-        flash("Session expired.", "danger")
-        return redirect(url_for('index'))
-
-    video_id = str(uuid.uuid4())
-    temp_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.webm")
-    mp3_file = os.path.join(DOWNLOAD_DIR, f"{video_id}_clip.mp3")
-
-    # Use cookie logic (reuse your existing code here!)
-    cookie_path = None
-    cookie_content = os.getenv('YOUTUBE_COOKIES')
-    if cookie_content:
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as f:
-            f.write(cookie_content)
-            cookie_path = f.name
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': temp_file,
-        'quiet': True,
-        'postprocessors': [],
-    }
-    if cookie_path:
-        ydl_opts['cookiefile'] = cookie_path
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        audio = AudioSegment.from_file(temp_file)
-        clip = audio[start:end]
-        clip.export(mp3_file, format='mp3')
-        os.remove(temp_file)
-        if cookie_path:
-            os.remove(cookie_path)
-
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_file)
-            except Exception as e:
-                app.logger.warning(f"Cleanup error: {e}")
-            return response
-
-        return send_file(mp3_file, as_attachment=True)
-
-    except Exception as e:
-        flash(f"Error slicing audio: {str(e)}", 'danger')
-        return redirect(url_for('preview'))
-
 
 if __name__ == '__main__':
     app.run(debug=True)
